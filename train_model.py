@@ -14,43 +14,38 @@ from data.targetp_data.load_data import creat_data
 from model.composite_model import ProteinModel
 
 
-# --- 辅助函数：计算切割位点准确率 ---
+# --- Auxiliary function: calculate the cleavage site accuracy ---
 def calculate_cs_accuracy(pred_seqs, true_seqs):
     correct = 0
     total = len(pred_seqs)
     if total == 0: return 0.0
 
-    # 确保真实标签转为 CPU numpy 格式
     if isinstance(true_seqs, torch.Tensor):
         true_seqs_np = true_seqs.detach().cpu().numpy()
     else:
         true_seqs_np = np.array(true_seqs)
 
     for i in range(total):
-        # 1. 寻找真实切割位点
         t_seq = true_seqs_np[i]
         t_indices = np.where(t_seq == 1)[0]
         true_cs = t_indices[-1] if len(t_indices) > 0 else -1
 
-        # 2. 处理预测标签
         p_seq = pred_seqs[i]
         if isinstance(p_seq, torch.Tensor):
             p_seq = p_seq.detach().cpu().numpy()
         else:
             p_seq = np.array(p_seq)
 
-        # 3. 寻找预测切割位点
         p_indices = np.where(p_seq == 1)[0]
         pred_cs = p_indices[-1] if len(p_indices) > 0 else -1
 
-        # 4. 严格匹配判定
         if true_cs == pred_cs:
             correct += 1
 
     return correct / total
 
 
-# --- 核心函数：验证与推理 ---
+# --- Core function: validation and inference ---
 def validate(model, loader, device):
     model.eval()
 
@@ -65,26 +60,21 @@ def validate(model, loader, device):
             tags = tags.to(device)
             species = species.to(device)
 
-            # 前向传播
             cls_logits, crf_pred_path = model(features, tags=None)
 
-            # 1. 获取分类结果
             cls_preds_list = torch.argmax(cls_logits, dim=1).cpu().numpy().tolist()
 
-            # 2. 获取序列结果
             if isinstance(crf_pred_path, torch.Tensor):
                 raw_seq_preds = crf_pred_path.detach().cpu().tolist()
             else:
                 raw_seq_preds = crf_pred_path
 
-            # --- 维度自动修正 (防崩溃) ---
             batch_size_current = len(cls_preds_list)
             crf_len = len(raw_seq_preds)
             if batch_size_current > 1 and crf_len == 1:
                 if isinstance(raw_seq_preds[0], list) and len(raw_seq_preds[0]) == batch_size_current:
                     raw_seq_preds = raw_seq_preds[0]
 
-            # --- 长度对齐 ---
             if len(cls_preds_list) != len(raw_seq_preds):
                 min_len = min(len(cls_preds_list), len(raw_seq_preds))
                 cls_preds_list = cls_preds_list[:min_len]
@@ -98,7 +88,7 @@ def validate(model, loader, device):
             cleaned_seq_preds = []
             for i, pred_class in enumerate(cls_preds_list):
                 seq = raw_seq_preds[i]
-                if pred_class == 0:  # 如果分类是 Other，强制序列全 0
+                if pred_class == 0:
                     if not isinstance(seq, list): seq = seq.tolist() if hasattr(seq, 'tolist') else list(seq)
                     cleaned_seq_preds.append([0] * len(seq))
                 else:
@@ -114,8 +104,7 @@ def validate(model, loader, device):
             else:
                 all_seq_labels = torch.cat((all_seq_labels, tags_tensor), dim=0)
 
-    # --- 计算详细指标 ---
-    # 1. 计算全局指标 (仅用于打印监控和选模型，不存CSV)
+    # --- Calculate detailed metrics ---
     min_total = min(len(all_cls_labels), len(all_cls_preds), len(all_seq_preds), len(all_seq_labels))
     y_true = np.array(all_cls_labels[:min_total])
     y_pred = np.array(all_cls_preds[:min_total])
@@ -130,7 +119,6 @@ def validate(model, loader, device):
         'Global_CS_Acc': global_cs_acc
     }
 
-    # 2. 计算分类型指标 (用于存CSV)
     target_classes = {'Other': 0, 'SP': 1, 'MT': 2, 'CH': 3, 'TH': 4}
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1, 2, 3, 4])
 
@@ -139,7 +127,6 @@ def validate(model, loader, device):
     print("-" * 80)
 
     for name, idx in target_classes.items():
-        # One-vs-Rest 分类指标计算
         tp = cm[idx, idx]
         fp = cm[:, idx].sum() - tp
         fn = cm[idx, :].sum() - tp
@@ -153,7 +140,6 @@ def validate(model, loader, device):
         den = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
         mcc = num / den if den > 0 else 0
 
-        # 计算该类别的 CS_Acc
         class_indices = [i for i, x in enumerate(y_true) if x == idx]
         count = len(class_indices)
 
@@ -166,7 +152,6 @@ def validate(model, loader, device):
 
         print(f"{name:<8} {p:.4f}   {r:.4f}   {f1:.4f}   {mcc:.4f}   {cs_acc:.4f}   {count:<6}")
 
-        # 存入字典
         metrics[f'{name}_Precision'] = p
         metrics[f'{name}_Recall'] = r
         metrics[f'{name}_F1'] = f1
@@ -177,7 +162,7 @@ def validate(model, loader, device):
     return metrics
 
 
-# --- 训练函数：训练一个 Epoch ---
+# --- Training function: train for one epoch ---
 def train_epoch(model, optimizer, loader, device, cls_criterion, scaler, scheduler):
     model.train()
     total_loss = 0
@@ -201,10 +186,8 @@ def train_epoch(model, optimizer, loader, device, cls_criterion, scaler, schedul
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-        # --- 参数更新 ---
         scaler.step(optimizer)
         scaler.update()
-        # 每个 Batch 更新一次学习率
         scheduler.step()
 
         total_loss += loss.item()
@@ -232,7 +215,6 @@ class FocalLoss(nn.Module):
 
 
 def main():
-    # --- 配置 ---
     SEED = 42
     BATCH_SIZE = 128
     EPOCHS = 50
@@ -263,7 +245,7 @@ def main():
         for ds in train_sets: ds.is_train = True
         val_set.is_train = False
 
-        # 加权随机采样
+        # Weighted Random Sampling
         train_loaders = []
         for ds in train_sets:
             targets = ds.species
@@ -273,7 +255,6 @@ def main():
                 targets = np.array(targets)
 
             class_counts = np.bincount(targets)
-            # 使用 0.5 次幂平衡
             class_weights = 1.0 / (np.power(class_counts, 0.5) + 1e-6)
             sample_weights = class_weights[targets]
 
@@ -320,12 +301,10 @@ def main():
 
             print(f"[Epoch {epoch + 1}/{EPOCHS}] Train Loss: {train_loss / 4:.4f}")
 
-            # validate 会打印详细表格
             metrics = validate(model, val_loader, device)
 
             print(f" >>> [Global Monitor] MCC: {metrics['Global_MCC']:.4f} | CS_Acc: {metrics['Global_CS_Acc']:.4f}")
 
-            # 使用 Global_MCC 选最佳模型
             if metrics['Global_MCC'] > best_metric:
                 best_metric = metrics['Global_MCC']
                 best_epoch_metrics = metrics.copy()
@@ -350,12 +329,10 @@ def main():
             mean_metrics['Fold'] = 'Average'
             df_final = pd.concat([df_results, pd.DataFrame([mean_metrics])], ignore_index=True)
 
-            # 动态生成列名
             ordered_cols = ['Fold', 'Best_Epoch']
             for cls in ['Other', 'SP', 'MT', 'CH', 'TH']:
                 ordered_cols.extend([f'{cls}_Precision', f'{cls}_Recall', f'{cls}_F1', f'{cls}_MCC', f'{cls}_CS_Acc'])
 
-            # 过滤
             final_cols = [c for c in ordered_cols if c in df_final.columns]
             df_final = df_final[final_cols]
 
@@ -364,7 +341,6 @@ def main():
             df_final.to_csv(csv_path, index=False, float_format='%.4f')
             print(f" >> Metrics updated: {csv_path}")
 
-        # 轮转数据集
         first = datasets.pop(0)
         datasets.append(first)
 

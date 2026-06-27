@@ -96,7 +96,7 @@ class ProteinModel(nn.Module):
         return class_output, crf_output
 
 
-# --- 通道注意力 ---
+# --- Channel Attention ---
 class SEBlock(nn.Module):
     def __init__(self, channel, reduction=16):
         super(SEBlock, self).__init__()
@@ -106,7 +106,7 @@ class SEBlock(nn.Module):
             nn.Linear(channel, channel // reduction, bias=False),
             nn.ReLU(inplace=True),
             nn.Linear(channel // reduction, channel, bias=False),
-            nn.Sigmoid()  # 输出 0~1 的权重
+            nn.Sigmoid()  # Output weights ranging from 0 to 1
         )
 
     def forward(self, x):
@@ -119,18 +119,17 @@ class SEBlock(nn.Module):
         return x * y.expand_as(x)
 
 
-# --- 多尺度卷积 ---
+# --- Multiscale Convolution ---
 class MultiScaleConvWrapper(nn.Module):
     def __init__(self, d_model, dropout=0.1):
         super(MultiScaleConvWrapper, self).__init__()
 
-        # 定义三个不同尺度的卷积核 (3, 5, 9)
-        # padding 保证输出长度不变
+        # Define convolution kernels of three different scales (3, 5, 9)
         self.conv3 = nn.Conv1d(d_model, d_model, kernel_size=3, padding=1)
         self.conv5 = nn.Conv1d(d_model, d_model, kernel_size=5, padding=2)
         self.conv9 = nn.Conv1d(d_model, d_model, kernel_size=9, padding=4)
 
-        # 融合层：将3个卷积的结果融合回原始维度
+        # Fusion layer: fuse the outputs of the three convolutions back to the original dimension
         self.fusion = nn.Linear(d_model * 3, d_model)
 
         # SE-Block
@@ -168,7 +167,7 @@ class MultiScaleConvWrapper(nn.Module):
 class TransformerEncoderWrapper(nn.Module):
     def __init__(self, d_model, num_layers=4, num_heads=8, d_ff=2048, dropout=0.1):
         super(TransformerEncoderWrapper, self).__init__()
-        # 使用可学习位置编码
+        # Using learnable positional encoding
         self.pos_encoder = LearnablePositionalEncoding(d_model, dropout=dropout, max_len=205)
 
         encoder_layer = nn.TransformerEncoderLayer(
@@ -189,7 +188,7 @@ class TransformerEncoderWrapper(nn.Module):
         return self.norm(output)
 
 
-# --- 可学习位置编码 ---
+# --- learnable positional encoding ---
 class LearnablePositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=500):
         super(LearnablePositionalEncoding, self).__init__()
@@ -203,7 +202,7 @@ class LearnablePositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-# --- 序列分类 ---
+# --- Sequence Classification ---
 class ComplexMLP(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dims, dropout=0.05, activation='gelu'):
         super(ComplexMLP, self).__init__()
